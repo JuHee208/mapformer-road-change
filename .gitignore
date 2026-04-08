@@ -140,3 +140,8 @@ runs/
 model_ckpt/
 =
 *.pdf
+*.tif
+*.tiff
+*.png
+outputs/
+tmp_*/

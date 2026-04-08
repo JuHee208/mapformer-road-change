@@ -1,6 +1,10 @@
 import os.path as osp
+import csv
+import json
 
 import torch.distributed as dist
+import numpy as np
+import mmcv
 from mmcv.runner import DistEvalHook as _DistEvalHook
 from mmcv.runner import EvalHook as _EvalHook
 from torch.nn.modules.batchnorm import _BatchNorm
@@ -44,13 +48,54 @@ class EvalHook(_EvalHook):
             efficient_test=self.efficient_test)
         runner.log_buffer.output['eval_iter_num'] = len(self.dataloader)
         key_score = self.evaluate(runner, results)
+        self._dump_eval_report(runner)
         if self.save_best:
-            self._save_ckpt_multi(runner)
+            self._save_ckpt_multi(runner, key_score=key_score)
 
-    def _save_ckpt_multi(self, runner):
+    def _dump_eval_report(self, runner):
+        out = runner.log_buffer.output
+        report_dir = osp.join(runner.work_dir, 'eval_reports')
+        mmcv.mkdir_or_exist(report_dir)
+        iter_id = int(runner.iter) + 1
+
+        def _serialize(v):
+            if isinstance(v, (int, float, np.integer, np.floating)):
+                return float(v)
+            if isinstance(v, np.ndarray):
+                return v.tolist()
+            return v
+
+        payload = {'iter': iter_id}
+        for k, v in out.items():
+            payload[k] = _serialize(v)
+
+        with open(osp.join(report_dir, f'iter_{iter_id:06d}.json'), 'w') as f:
+            json.dump(payload, f, indent=2)
+
+        csv_path = osp.join(report_dir, 'summary.csv')
+        columns = [
+            'iter',
+            'mIoU_4', 'macroF1', 'IoU_12', 'F1_12', 'IoU_23', 'F1_23',
+            'P_change', 'R_change', 'F1_change', 'AUPRC_change',
+            'RoadT2_IoU', 'RoadT2_P', 'RoadT2_R', 'RoadT2_F1',
+            'BC', 'BC_precision', 'BC_recall', 'SC', 'SCS', 'mIoU'
+        ]
+        row = {c: payload.get(c, '') for c in columns}
+        write_header = not osp.exists(csv_path)
+        with open(csv_path, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=columns)
+            if write_header:
+                writer.writeheader()
+            writer.writerow(row)
+
+    def _save_ckpt_multi(self, runner, key_score=None):
         """Save multiple best checkpoints if configured."""
         if not self._save_best_list:
-            self._save_ckpt(runner)
+            if key_score is None:
+                metrics = runner.log_buffer.output
+                indicator = getattr(self, 'key_indicator', None)
+                key_score = metrics.get(indicator, None) if indicator is not None else None
+            self._save_ckpt(runner, key_score)
             return
         metrics = runner.log_buffer.output
         rule = getattr(self, 'rule', 'greater')
@@ -75,6 +120,8 @@ class EvalHook(_EvalHook):
                         save_optimizer=True,
                         meta=runner.meta,
                         create_symlink=False)
+                    if metric == self._save_best_list[0]:
+                        self.best_ckpt_path = osp.join(runner.work_dir, f'best_{metric}.pth')
                 if runner.meta is not None:
                     runner.meta.setdefault('hook_msgs', {})
                     runner.meta['hook_msgs'][f'best_{metric}'] = cur
@@ -138,14 +185,55 @@ class DistEvalHook(_DistEvalHook):
             print('\n')
             runner.log_buffer.output['eval_iter_num'] = len(self.dataloader)
             key_score = self.evaluate(runner, results)
+            self._dump_eval_report(runner)
 
             if self.save_best:
-                self._save_ckpt_multi(runner)
+                self._save_ckpt_multi(runner, key_score=key_score)
 
-    def _save_ckpt_multi(self, runner):
+    def _dump_eval_report(self, runner):
+        out = runner.log_buffer.output
+        report_dir = osp.join(runner.work_dir, 'eval_reports')
+        mmcv.mkdir_or_exist(report_dir)
+        iter_id = int(runner.iter) + 1
+
+        def _serialize(v):
+            if isinstance(v, (int, float, np.integer, np.floating)):
+                return float(v)
+            if isinstance(v, np.ndarray):
+                return v.tolist()
+            return v
+
+        payload = {'iter': iter_id}
+        for k, v in out.items():
+            payload[k] = _serialize(v)
+
+        with open(osp.join(report_dir, f'iter_{iter_id:06d}.json'), 'w') as f:
+            json.dump(payload, f, indent=2)
+
+        csv_path = osp.join(report_dir, 'summary.csv')
+        columns = [
+            'iter',
+            'mIoU_4', 'macroF1', 'IoU_12', 'F1_12', 'IoU_23', 'F1_23',
+            'P_change', 'R_change', 'F1_change', 'AUPRC_change',
+            'RoadT2_IoU', 'RoadT2_P', 'RoadT2_R', 'RoadT2_F1',
+            'BC', 'BC_precision', 'BC_recall', 'SC', 'SCS', 'mIoU'
+        ]
+        row = {c: payload.get(c, '') for c in columns}
+        write_header = not osp.exists(csv_path)
+        with open(csv_path, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=columns)
+            if write_header:
+                writer.writeheader()
+            writer.writerow(row)
+
+    def _save_ckpt_multi(self, runner, key_score=None):
         """Save multiple best checkpoints if configured."""
         if not self._save_best_list:
-            self._save_ckpt(runner)
+            if key_score is None:
+                metrics = runner.log_buffer.output
+                indicator = getattr(self, 'key_indicator', None)
+                key_score = metrics.get(indicator, None) if indicator is not None else None
+            self._save_ckpt(runner, key_score)
             return
         metrics = runner.log_buffer.output
         rule = getattr(self, 'rule', 'greater')
@@ -170,6 +258,8 @@ class DistEvalHook(_DistEvalHook):
                         save_optimizer=True,
                         meta=runner.meta,
                         create_symlink=False)
+                    if metric == self._save_best_list[0]:
+                        self.best_ckpt_path = osp.join(runner.work_dir, f'best_{metric}.pth')
                 if runner.meta is not None:
                     runner.meta.setdefault('hook_msgs', {})
                     runner.meta['hook_msgs'][f'best_{metric}'] = cur

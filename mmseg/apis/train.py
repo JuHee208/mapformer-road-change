@@ -99,6 +99,26 @@ def train_segmentor(model,
             logger=logger,
             meta=meta))
 
+    # Keep frozen backbone in eval mode during stage-1 finetuning.
+    freeze_cfg = cfg.get('finetune_freeze', None)
+    if freeze_cfg and freeze_cfg.get('enable', False) \
+            and freeze_cfg.get('backbone', False) \
+            and freeze_cfg.get('backbone_eval', True):
+        class FrozenBackboneEvalHook(Hook):
+            def _set_backbone_eval(self, runner):
+                model_ref = runner.model.module if hasattr(runner.model, 'module') else runner.model
+                backbone = getattr(model_ref, 'backbone', None)
+                if backbone is not None:
+                    backbone.eval()
+
+            def before_train_epoch(self, runner):
+                self._set_backbone_eval(runner)
+
+            def before_train_iter(self, runner):
+                self._set_backbone_eval(runner)
+
+        runner.register_hook(FrozenBackboneEvalHook(), priority='HIGH')
+
     # Optional loss plot hook
     loss_plot_cfg = cfg.get('loss_plot', None)
     if loss_plot_cfg and loss_plot_cfg.get('enable', False):
@@ -332,6 +352,95 @@ def train_segmentor(model,
                         img = img[[2, 1, 0], ...]
                     return img
 
+                def _load_gt_maps(self, idx):
+                    """Load BC/SEM GT maps directly from dataset annotations."""
+                    img_infos = getattr(self.dataloader.dataset, 'img_infos', None)
+                    if not img_infos or idx >= len(img_infos):
+                        return None, None
+                    ann = img_infos[idx].get('ann', None)
+                    if ann is None:
+                        return None, None
+
+                    def _read(path):
+                        if path is None:
+                            return None
+                        try:
+                            arr = mmcv.imread(path, flag='unchanged', backend='tifffile')
+                            return arr.squeeze().astype(np.uint8)
+                        except Exception:
+                            return None
+
+                    gt_bc = _read(ann.get('seg_map', None))
+                    gt_sem = _read(ann.get('seg_map_post', None))
+                    return gt_bc, gt_sem
+
+                def _resize_label(self, label, target_hw):
+                    if label is None:
+                        return None
+                    if label.shape == target_hw:
+                        return label
+                    try:
+                        return mmcv.imresize(
+                            label.astype(np.uint8),
+                            target_hw[::-1],
+                            interpolation='nearest')
+                    except Exception:
+                        return label
+
+                def _safe_save_image(self, image, save_path):
+                    try:
+                        image.save(save_path)
+                    except Exception as exc:
+                        print_log(
+                            f'ValVisHook: failed to save {save_path}: {exc}',
+                            logger='mmseg')
+
+                def _save_bc_map(self, arr_u8, save_path):
+                    if arr_u8 is None:
+                        return
+                    arr_u8 = arr_u8.astype(np.uint8)
+                    ignore_mask = (arr_u8 == 255)
+                    # Always use fixed 4-class BC palette:
+                    # 0 bg(black), 1 new(red), 2 removed(blue), 3 unchanged(green)
+                    palette_bc = np.array([
+                        [0, 0, 0],        # 0 bg
+                        [255, 0, 0],      # 1 new
+                        [0, 0, 255],      # 2 removed
+                        [0, 255, 0],      # 3 unchanged
+                    ], dtype=np.uint8)
+                    hbc, wbc = arr_u8.shape
+                    bc_rgb = np.full((hbc, wbc, 3), 128, dtype=np.uint8)
+                    for cls_idx, color in enumerate(palette_bc):
+                        bc_rgb[arr_u8 == cls_idx] = color
+                    bc_rgb[ignore_mask] = np.array([127, 127, 127], dtype=np.uint8)
+                    self._safe_save_image(Image.fromarray(bc_rgb), save_path)
+
+                def _save_sem_map(self, arr_u8, save_path):
+                    if arr_u8 is None:
+                        return
+                    arr_u8 = arr_u8.astype(np.uint8)
+                    ignore_mask = (arr_u8 == 255)
+                    if arr_u8.max() <= 1:
+                        vis = (arr_u8 * 255).astype(np.uint8)
+                        vis[ignore_mask] = 127
+                        self._safe_save_image(
+                            Image.fromarray(vis, mode='L'),
+                            save_path)
+                    else:
+                        h, w = arr_u8.shape
+                        sem_rgb = np.full((h, w, 3), 128, dtype=np.uint8)
+                        palette = [
+                            (220, 20, 60),   # artificial
+                            (0, 128, 0),     # agricultural
+                            (34, 139, 34),   # forest
+                            (0, 191, 255),   # wetland
+                            (0, 0, 255),     # water
+                        ]
+                        for cls_idx, color in enumerate(palette):
+                            sem_rgb[arr_u8 == cls_idx] = color
+                        sem_rgb[ignore_mask] = np.array([127, 127, 127], dtype=np.uint8)
+                        self._safe_save_image(Image.fromarray(sem_rgb), save_path)
+
                 def after_train_iter(self, runner):
                     if hasattr(runner, 'rank') and runner.rank != 0:
                         return
@@ -355,6 +464,7 @@ def train_segmentor(model,
                         random.shuffle(indices)
                         indices = indices[:self.num_samples]
                         for idx in indices:
+                            gt_bc_raw, gt_sem_raw = self._load_gt_maps(idx)
                             data = self.dataloader.dataset[idx]
                             # mimic dataloader output for single sample
                             for k, v in data.items():
@@ -372,7 +482,8 @@ def train_segmentor(model,
                                 else:
                                     img_show = img[:3, ...]
                                 img_show = img_show.permute(1, 2, 0).clamp(0, 255).byte().numpy()
-                                Image.fromarray(img_show).save(
+                                self._safe_save_image(
+                                    Image.fromarray(img_show),
                                     osp.join(iter_dir, f'sample_{count}_img.png'))
                             # forward
                             # get probability map for BC
@@ -413,7 +524,13 @@ def train_segmentor(model,
                                 img_meta=img_metas,
                                 rescale=False,
                                 gt_semantic_seg_pre=gt_pre)
-                            bc_prob = out['bc'][:, 1, :, :].detach().cpu().numpy()
+                            bc_soft = out['bc']
+                            if bc_soft.shape[1] >= 4:
+                                bc_prob = (bc_soft[:, 1, :, :] + bc_soft[:, 2, :, :]).detach().cpu().numpy()
+                            elif bc_soft.shape[1] >= 2:
+                                bc_prob = bc_soft[:, 1, :, :].detach().cpu().numpy()
+                            else:
+                                bc_prob = bc_soft[:, 0, :, :].detach().cpu().numpy()
                             gt_change = data.get('gt_semantic_seg', None)
                             if hasattr(gt_change, 'data'):
                                 gt_change = gt_change.data
@@ -460,8 +577,14 @@ def train_segmentor(model,
                                             continue
                                     mask = (gt_b != 255)
                                     if mask.any():
+                                        gt_bin = gt_b[mask]
+                                        # 4-class change: positive = cls1|cls2
+                                        if gt_bin.max() > 1:
+                                            gt_bin = np.isin(gt_bin, [1, 2]).astype(np.uint8)
+                                        else:
+                                            gt_bin = (gt_bin == 1).astype(np.uint8)
                                         pr_scores.append(prob_b[mask].reshape(-1))
-                                        pr_labels.append(gt_b[mask].reshape(-1))
+                                        pr_labels.append(gt_bin.reshape(-1))
 
                             # drop gt_semantic_seg for inference path
                             if 'gt_semantic_seg' in data:
@@ -496,35 +619,51 @@ def train_segmentor(model,
                                         bc_map = bc[0]
                                 else:
                                     bc_map = bc
-                                bc_vis = (bc_map.astype('uint8') * 255)
-                                Image.fromarray(bc_vis).save(
+                                bc_u8 = bc_map.astype('uint8')
+                                self._save_bc_map(
+                                    bc_u8,
                                     osp.join(iter_dir, f'sample_{count}_bc.png'))
+                                gt_bc = self._resize_label(gt_bc_raw, bc_u8.shape)
+                                self._save_bc_map(
+                                    gt_bc,
+                                    osp.join(iter_dir, f'sample_{count}_bc_gt.png'))
 
                             if sem is not None:
-                                # apply palette for semantic classes (RGB)
                                 if sem.ndim == 3:
                                     # (C,H,W) -> class map
                                     sem_u8 = sem.argmax(axis=0).astype('uint8')
                                 else:
                                     sem_u8 = sem.astype('uint8')
-                                if hasattr(model_ref, 'PALETTE') and model_ref.PALETTE is not None:
-                                    palette = model_ref.PALETTE
+                                # For binary semantics, force grayscale:
+                                # 0=black(background), 1=white(road)
+                                if sem_u8.max() <= 1:
+                                    self._save_sem_map(
+                                        sem_u8,
+                                        osp.join(iter_dir, f'sample_{count}_sem.png'))
                                 else:
-                                    # fallback palette (5 classes)
-                                    palette = [
-                                        (220, 20, 60),   # artificial
-                                        (0, 128, 0),     # agricultural
-                                        (34, 139, 34),   # forest
-                                        (0, 191, 255),   # wetland
-                                        (0, 0, 255),     # water
-                                    ]
-                                h, w = sem_u8.shape
-                                # start with gray for unknown/ignore pixels
-                                sem_rgb = np.full((h, w, 3), 128, dtype=np.uint8)
-                                for idx, color in enumerate(palette):
-                                    sem_rgb[sem_u8 == idx] = color
-                                Image.fromarray(sem_rgb).save(
-                                    osp.join(iter_dir, f'sample_{count}_sem.png'))
+                                    if hasattr(model_ref, 'PALETTE') and model_ref.PALETTE is not None:
+                                        palette = model_ref.PALETTE
+                                    else:
+                                        # fallback palette (5 classes)
+                                        palette = [
+                                            (220, 20, 60),   # artificial
+                                            (0, 128, 0),     # agricultural
+                                            (34, 139, 34),   # forest
+                                            (0, 191, 255),   # wetland
+                                            (0, 0, 255),     # water
+                                        ]
+                                    h, w = sem_u8.shape
+                                    # start with gray for unknown/ignore pixels
+                                    sem_rgb = np.full((h, w, 3), 128, dtype=np.uint8)
+                                    for idx, color in enumerate(palette):
+                                        sem_rgb[sem_u8 == idx] = color
+                                    self._safe_save_image(
+                                        Image.fromarray(sem_rgb),
+                                        osp.join(iter_dir, f'sample_{count}_sem.png'))
+                                gt_sem = self._resize_label(gt_sem_raw, sem_u8.shape)
+                                self._save_sem_map(
+                                    gt_sem,
+                                    osp.join(iter_dir, f'sample_{count}_sem_gt.png'))
                             count += 1
                         # PR curve
                         if pr_scores and pr_labels:
@@ -539,7 +678,13 @@ def train_segmentor(model,
                             plt.title('PR Curve (BC)')
                             plt.grid(True, alpha=0.3)
                             plt.tight_layout()
-                            plt.savefig(osp.join(iter_dir, 'pr_curve.png'))
+                            try:
+                                plt.savefig(osp.join(iter_dir, 'pr_curve.png'))
+                            except Exception as exc:
+                                print_log(
+                                    f'ValVisHook: failed to save '
+                                    f"{osp.join(iter_dir, 'pr_curve.png')}: {exc}",
+                                    logger='mmseg')
                             plt.close()
                         else:
                             # write debug note if PR not generated
@@ -557,7 +702,7 @@ def train_segmentor(model,
     if cfg.resume_from:
         runner.resume(cfg.resume_from)
     elif cfg.load_from:
-        runner.load_checkpoint(cfg.load_from)
+        runner.load_checkpoint(cfg.load_from, strict=False)
     runner.run(data_loaders, cfg.workflow)
 
     # test

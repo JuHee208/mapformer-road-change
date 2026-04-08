@@ -119,4 +119,64 @@ class CustomDatasetCCD(CustomDatasetCD):
         print_log('per class results:', logger=logger)
         print_log('\n' + classwise_table.get_string(), logger=logger)
 
+        # Extended report for 4-class change setting (LSMD finetune)
+        if 'Change_IoU_per_class' in ret_metrics:
+            ch_iou = ret_metrics['Change_IoU_per_class']
+            ch_p = ret_metrics.get('Change_Precision_per_class', None)
+            ch_r = ret_metrics.get('Change_Recall_per_class', None)
+            ch_f1 = ret_metrics.get('Change_F1_per_class', None)
+
+            ext_fields = ['iter', 'mIoU_4', 'macroF1', 'IoU_12', 'F1_12',
+                          'P_change', 'R_change', 'F1_change', 'AUPRC_change',
+                          'RoadT2_IoU', 'RoadT2_F1']
+            ext_table = PrettyTable(field_names=ext_fields)
+            ext_table.add_row([
+                '-',  # iter is tracked in eval_reports/summary.csv
+                np.round(ret_metrics.get('mIoU_4', np.nan), 3),
+                np.round(ret_metrics.get('macroF1', np.nan), 3),
+                np.round(ret_metrics.get('IoU_12', np.nan), 3),
+                np.round(ret_metrics.get('F1_12', np.nan), 3),
+                np.round(ret_metrics.get('P_change', np.nan), 3),
+                np.round(ret_metrics.get('R_change', np.nan), 3),
+                np.round(ret_metrics.get('F1_change', np.nan), 3),
+                np.round(ret_metrics.get('AUPRC_change', np.nan), 3),
+                np.round(ret_metrics.get('RoadT2_IoU', np.nan), 3),
+                np.round(ret_metrics.get('RoadT2_F1', np.nan), 3),
+            ])
+            print_log('[Validation Summary - Extended]:', logger=logger)
+            print_log('\n' + ext_table.get_string(), logger=logger)
+
+            ch_table = PrettyTable(field_names=['metric', 'cls0', 'cls1', 'cls2', 'cls3'])
+            ch_table.add_row(['IoU'] + list(np.round(ch_iou, 3)))
+            if ch_p is not None:
+                ch_table.add_row(['Prec'] + list(np.round(ch_p, 3)))
+            if ch_r is not None:
+                ch_table.add_row(['Recall'] + list(np.round(ch_r, 3)))
+            if ch_f1 is not None:
+                ch_table.add_row(['F1'] + list(np.round(ch_f1, 3)))
+            print_log('[Per-class Change Metrics] (0:bg,1:new,2:removed,3:unchanged):', logger=logger)
+            print_log('\n' + ch_table.get_string(), logger=logger)
+
+            bc_table = PrettyTable(field_names=['metric', 'Precision', 'Recall', 'F1', 'AUPRC'])
+            bc_table.add_row([
+                'change(1|2)',
+                np.round(ret_metrics.get('P_change', np.nan), 3),
+                np.round(ret_metrics.get('R_change', np.nan), 3),
+                np.round(ret_metrics.get('F1_change', np.nan), 3),
+                np.round(ret_metrics.get('AUPRC_change', np.nan), 3),
+            ])
+            print_log('[Binary Change View] (positive = cls1|cls2):', logger=logger)
+            print_log('\n' + bc_table.get_string(), logger=logger)
+
+            road_table = PrettyTable(field_names=['target', 'IoU', 'Precision', 'Recall', 'F1'])
+            road_table.add_row([
+                'road_t2 (cls1|cls3)',
+                np.round(ret_metrics.get('RoadT2_IoU', np.nan), 3),
+                np.round(ret_metrics.get('RoadT2_P', np.nan), 3),
+                np.round(ret_metrics.get('RoadT2_R', np.nan), 3),
+                np.round(ret_metrics.get('RoadT2_F1', np.nan), 3),
+            ])
+            print_log('[Road Inference Metrics] (positive = cls1|cls3):', logger=logger)
+            print_log('\n' + road_table.get_string(), logger=logger)
+
         return ret_metrics

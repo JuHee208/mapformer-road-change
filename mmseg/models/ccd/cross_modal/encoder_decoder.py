@@ -1,6 +1,5 @@
 from mmcv.runner import auto_fp16
 from ..encoder_decoder import EncoderDecoderCCD
-from ...cd.fhd import split_images
 from ...builder import SEGMENTORS
 
 @SEGMENTORS.register_module()
@@ -21,9 +20,8 @@ class EncoderDecoderCMCD(EncoderDecoderCCD):
         """
         
         if return_loss:
-            img1, img2 = split_images(img)
             return self.forward_train(
-                img=img2,
+                img=img,
                 img_metas=img_metas,
                 gt_semantic_seg_pre=gt_semantic_seg_pre,
                 gt_semantic_seg_post=gt_semantic_seg_post, 
@@ -31,9 +29,8 @@ class EncoderDecoderCMCD(EncoderDecoderCCD):
                 )
         else:
             assert isinstance(img, list) and len(img) == 1, 'Expected a one item list!'
-            img1, img2 = split_images(img[0])
             return self.forward_test(
-                imgs=[img2],
+                imgs=img,
                 img_metas=img_metas,
                 gt_semantic_seg_pre=gt_semantic_seg_pre,
                 **kwargs

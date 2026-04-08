@@ -91,6 +91,7 @@ class ContrastiveModule(nn.Module):
             loss_weight, 
             balance_pos_neg,
             align_corners,
+            change_classes=(1,),
             margin=0
         ):
         super(ContrastiveModule, self).__init__()
@@ -106,6 +107,7 @@ class ContrastiveModule(nn.Module):
         self.balance_pos_neg = balance_pos_neg
         self.margin = margin
         self.align_corners = align_corners
+        self.change_classes = tuple(int(c) for c in change_classes)
 
     def forward(self, bc, g1, f2, f1=None, m1=None):
         B = g1.shape[0]
@@ -119,7 +121,10 @@ class ContrastiveModule(nn.Module):
         f2 = resize(input=f2, size=(H,W), mode='bilinear', align_corners=self.align_corners)
         f2_proj = self.img_proj(f2)
         bc = resize(input=bc.float(), size=(H,W), mode='nearest')
-        mask = (bc == 1).flatten() 
+        change_mask = torch.zeros_like(bc, dtype=torch.bool)
+        for c in self.change_classes:
+            change_mask = change_mask | (bc.long() == c)
+        change_mask = change_mask.flatten()
         cos2 = nn.functional.cosine_similarity(g1_proj, f2_proj, dim=1).flatten()
 
         if f1 is not None:
@@ -128,12 +133,12 @@ class ContrastiveModule(nn.Module):
             cos1 = nn.functional.cosine_similarity(g1_proj, f1_proj, dim=1).flatten()
 
         N_pixel = B * H * W * 2 if f1 is not None else B * H * W
-        N_neg = mask.sum()
-        w_pos = N_pixel if not self.balance_pos_neg else N_pixel - N_neg + torch.finfo(torch.float).eps
-        w_neg = N_pixel if not self.balance_pos_neg else N_neg + torch.finfo(torch.float).eps
+        n_change = change_mask.sum()
+        w_pos = N_pixel if not self.balance_pos_neg else N_pixel - n_change + torch.finfo(torch.float).eps
+        w_neg = N_pixel if not self.balance_pos_neg else n_change + torch.finfo(torch.float).eps
 
-        loss2_pos = -cos2[~mask].sum() / w_pos
-        loss2_neg = torch.maximum(cos2[mask] - self.margin, torch.tensor(0., device=cos2.device)).sum() / w_neg
+        loss2_pos = -cos2[~change_mask].sum() / w_pos
+        loss2_neg = torch.maximum(cos2[change_mask] - self.margin, torch.tensor(0., device=cos2.device)).sum() / w_neg
         loss2_neg = loss2_neg + self.margin
         
         if f1 is not None:

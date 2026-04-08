@@ -6,6 +6,7 @@ import numpy as np
 from mmcv.parallel import DataContainer as DC
 
 from mmseg.datasets.pipelines.formating import DefaultFormatBundle
+from mmseg.datasets.pipelines.transforms import PhotoMetricDistortion
 
 from ..pipelines import LoadImagesFromFile, LoadAnnotations, to_tensor
 from ..builder import PIPELINES
@@ -248,6 +249,139 @@ class CreateBinaryChangeMask:
 
         results['gt_semantic_seg'] = gt_bc
         results['seg_fields'].append('gt_semantic_seg')
+        return results
+
+
+@PIPELINES.register_module()
+class RandomDiscreteRotate:
+    """Rotate image/labels by one of discrete angles (e.g., 90/180/270)."""
+
+    def __init__(
+        self,
+        prob=0.5,
+        angles=(90, 180, 270),
+        pad_val=0,
+        seg_pad_val=255,
+        center=None,
+        auto_bound=False,
+    ):
+        self.prob = prob
+        self.angles = tuple(angles)
+        self.pad_val = pad_val
+        self.seg_pad_val = seg_pad_val
+        self.center = center
+        self.auto_bound = auto_bound
+        assert 0.0 <= self.prob <= 1.0, "prob must be in [0,1]"
+        assert len(self.angles) > 0, "angles must be non-empty"
+
+    def __call__(self, results):
+        if np.random.rand() >= self.prob:
+            return results
+        angle = float(np.random.choice(self.angles))
+        results['img'] = mmcv.imrotate(
+            results['img'],
+            angle=angle,
+            border_value=self.pad_val,
+            center=self.center,
+            auto_bound=self.auto_bound,
+        )
+        for key in results.get('seg_fields', []):
+            results[key] = mmcv.imrotate(
+                results[key],
+                angle=angle,
+                border_value=self.seg_pad_val,
+                center=self.center,
+                auto_bound=self.auto_bound,
+                interpolation='nearest',
+            )
+        return results
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}(prob={self.prob}, "
+            f"angles={self.angles}, pad_val={self.pad_val}, "
+            f"seg_pad_val={self.seg_pad_val})"
+        )
+
+
+@PIPELINES.register_module()
+class ChangeAwareAugment:
+    """Apply selected augmentations only when change classes are present."""
+
+    def __init__(
+        self,
+        change_classes=(1, 2),
+        ignore_index=255,
+        flip_prob=0.5,
+        flip_directions=("horizontal",),
+        rotate_prob=0.5,
+        rotate_angles=(90, 180, 270),
+        photo_prob=1.0,
+        rotate_pad_val=0,
+        rotate_seg_pad_val=255,
+    ):
+        self.change_classes = tuple(change_classes)
+        self.ignore_index = ignore_index
+        self.flip_prob = flip_prob
+        self.flip_directions = tuple(flip_directions)
+        self.rotate_prob = rotate_prob
+        self.rotate_angles = tuple(rotate_angles)
+        self.photo_prob = photo_prob
+        self.rotate_pad_val = rotate_pad_val
+        self.rotate_seg_pad_val = rotate_seg_pad_val
+        self.photometric = PhotoMetricDistortion()
+
+    def _has_change(self, gt):
+        valid = gt != self.ignore_index
+        if not np.any(valid):
+            return False
+        return np.isin(gt[valid], self.change_classes).any()
+
+    def _flip(self, results):
+        if self.flip_prob <= 0 or np.random.rand() >= self.flip_prob:
+            return False, None
+        direction = np.random.choice(self.flip_directions)
+        results['img'] = mmcv.imflip(results['img'], direction=direction)
+        for key in results.get('seg_fields', []):
+            results[key] = mmcv.imflip(results[key], direction=direction)
+        return True, direction
+
+    def _rotate(self, results):
+        if self.rotate_prob <= 0 or np.random.rand() >= self.rotate_prob:
+            return
+        angle = float(np.random.choice(self.rotate_angles))
+        results['img'] = mmcv.imrotate(
+            results['img'],
+            angle=angle,
+            border_value=self.rotate_pad_val,
+            interpolation='bilinear',
+        )
+        for key in results.get('seg_fields', []):
+            results[key] = mmcv.imrotate(
+                results[key],
+                angle=angle,
+                border_value=self.rotate_seg_pad_val,
+                interpolation='nearest',
+            )
+
+    def _photometric(self, results):
+        if self.photo_prob <= 0 or np.random.rand() >= self.photo_prob:
+            return results
+        return self.photometric(results)
+
+    def __call__(self, results):
+        # Keep meta keys consistent with Collect defaults.
+        results.setdefault('flip', False)
+        results.setdefault('flip_direction', None)
+        gt = results.get('gt_semantic_seg', None)
+        if gt is None or not self._has_change(gt):
+            return results
+        did_flip, direction = self._flip(results)
+        if did_flip:
+            results['flip'] = True
+            results['flip_direction'] = direction
+        self._rotate(results)
+        results = self._photometric(results)
         return results
 
 @PIPELINES.register_module()

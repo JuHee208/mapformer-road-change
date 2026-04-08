@@ -5,12 +5,13 @@ import torch
 import torch.nn as nn
 from mmcv.utils import build_from_cfg
 from mmcv.cnn import ConvModule
+import torch.nn.functional as F
 
 from mmseg.models.cd.fhd import split_batches
 from mmseg.models.decode_heads import SegformerHead
 from ..bc_heads import BaseHeadBC, ConcatModule, KConcatModule, ContrastiveModule
 from ..map_encoders import MAP_ENCODERS
-from ...builder import HEADS
+from ...builder import HEADS, build_loss
 from ....ops import resize
 
 @HEADS.register_module()
@@ -166,6 +167,12 @@ class CrossModalMapFormerHead(CrossModalAttentionHead):
         k=None, 
         contrastive_loss_weight=1.0,
         balance_pos_neg=True,
+        change_classes=(1,),
+        focal_loss=None,
+        dice_loss=None,
+        separable_loss_weight=0.0,
+        hard_negative_ratio=1.0,
+        hard_negative_min_kept=0,
         **kwargs
     ):
         super(CrossModalMapFormerHead, self).__init__(
@@ -192,8 +199,68 @@ class CrossModalMapFormerHead(CrossModalAttentionHead):
             proj_channels=self.map_encoder.out_channels[0],
             loss_weight=contrastive_loss_weight,
             balance_pos_neg=balance_pos_neg,
+            change_classes=change_classes,
             align_corners=self.align_corners
         )
+        self.change_classes = tuple(int(c) for c in change_classes)
+        self.non_change_classes = tuple(c for c in range(self.num_classes) if c not in self.change_classes)
+        self.focal_loss = build_loss(focal_loss) if focal_loss is not None else None
+        self.dice_loss = build_loss(dice_loss) if dice_loss is not None else None
+        self.separable_loss_weight = float(separable_loss_weight)
+        self.hard_negative_ratio = float(hard_negative_ratio)
+        self.hard_negative_min_kept = int(hard_negative_min_kept)
+
+    def _resize_logits_and_labels(self, seg_logit, seg_label):
+        seg_logit = resize(
+            input=seg_logit,
+            size=seg_label.shape[2:],
+            mode='bilinear',
+            align_corners=self.align_corners)
+        seg_label = seg_label.squeeze(1).long()
+        return seg_logit, seg_label
+
+    def _get_change_target(self, seg_label):
+        target = torch.zeros_like(seg_label, dtype=torch.bool)
+        for c in self.change_classes:
+            target = target | (seg_label == c)
+        return target
+
+    def _separable_change_loss(self, seg_logit, seg_label):
+        if self.separable_loss_weight <= 0:
+            return seg_logit.new_zeros([])
+
+        valid = (seg_label != self.ignore_index)
+        if valid.sum() == 0:
+            return seg_logit.new_zeros([])
+
+        change_target = self._get_change_target(seg_label).float()
+        pos_logit = torch.logsumexp(seg_logit[:, self.change_classes, ...], dim=1)
+        neg_logit = torch.logsumexp(seg_logit[:, self.non_change_classes, ...], dim=1)
+        change_logit = pos_logit - neg_logit
+
+        loss_map = F.binary_cross_entropy_with_logits(change_logit, change_target, reduction='none')
+        if self.hard_negative_ratio >= 1.0:
+            return loss_map[valid].mean() * self.separable_loss_weight
+
+        pos_mask = (change_target > 0.5) & valid
+        neg_mask = (change_target < 0.5) & valid
+        keep_mask = pos_mask.clone()
+
+        if neg_mask.any():
+            neg_losses = loss_map[neg_mask]
+            k_ratio = int(self.hard_negative_ratio * neg_losses.numel())
+            k = max(self.hard_negative_min_kept, k_ratio)
+            k = min(max(k, 0), neg_losses.numel())
+            if k > 0:
+                topk = torch.topk(neg_losses, k=k, largest=True, sorted=False).values
+                threshold = topk.min()
+                keep_mask = keep_mask | (neg_mask & (loss_map >= threshold))
+
+        if keep_mask.any():
+            loss = loss_map[keep_mask].mean()
+        else:
+            loss = loss_map[valid].mean()
+        return loss * self.separable_loss_weight
         
 
     def forward_train(
@@ -250,6 +317,17 @@ class CrossModalMapFormerHead(CrossModalAttentionHead):
         out = self.fusion_conv(torch.cat(bitemporal_features, dim=1))
         bc_logit = self.cls_seg(out)
         losses = self.losses(seg_logit=bc_logit, seg_label=gt_semantic_seg)
+        bc_logit_up, bc_label_up = self._resize_logits_and_labels(
+            seg_logit=bc_logit, seg_label=gt_semantic_seg)
+
+        if self.focal_loss is not None:
+            losses['loss_focal'] = self.focal_loss(
+                bc_logit_up, bc_label_up, ignore_index=self.ignore_index)
+        if self.dice_loss is not None:
+            losses['loss_dice'] = self.dice_loss(bc_logit_up, bc_label_up)
+        if self.separable_loss_weight > 0:
+            losses['loss_sep'] = self._separable_change_loss(
+                seg_logit=bc_logit_up, seg_label=bc_label_up)
 
         f2_merged = self.contrastive_img_forward(f2_list)
         contrastive_losses = self.contrastive_module(

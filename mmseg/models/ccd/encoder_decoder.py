@@ -145,24 +145,36 @@ class EncoderDecoderCCD(EncoderDecoder):
             img_meta=img_metas, 
             rescale=rescale
         )
-        bc = output['bc']
+        bc_soft = output['bc']
         sem = output['sem']
 
-        bc = bc.argmax(dim=1)
+        bc = bc_soft.argmax(dim=1)
         sem = sem.argmax(dim=1)
+
+        # Change probability for AUPRC / PR logging:
+        # 4-class change: positive = cls1|cls2 (new|removed)
+        # 2-class BC:      positive = cls1
+        if bc_soft.shape[1] >= 4:
+            bc_score_change = (bc_soft[:, 1, :, :] + bc_soft[:, 2, :, :])
+        elif bc_soft.shape[1] >= 2:
+            bc_score_change = bc_soft[:, 1, :, :]
+        else:
+            bc_score_change = bc_soft[:, 0, :, :]
 
         bc = bc.cpu().numpy().astype(np.uint8)
         sem = sem.cpu().numpy().astype(np.uint8)
+        bc_score_change = bc_score_change.cpu().numpy().astype(np.float16)
         # unravel batch dim
         # bc = list(bc)
         # sem = list(sem)
 
         # ensure that batch size is one for inference
-        assert bc.shape[0] == sem.shape[0] == 1, 'Inference should be run with a batch size of one!'
+        assert bc.shape[0] == sem.shape[0] == bc_score_change.shape[0] == 1, 'Inference should be run with a batch size of one!'
         bc = bc[0]
         sem = sem[0]
+        bc_score_change = bc_score_change[0]
 
-        return {'bc': bc, 'sem': sem}
+        return {'bc': bc, 'sem': sem, 'bc_score_change': bc_score_change}
 
     def encode_decode(self, img, img_metas, gt_semantic_seg_pre=None):
         """Encode images with backbone and decode into a semantic segmentation

@@ -10,7 +10,9 @@ from .transforms import (AlignedResize, ResizeToMultiple, CLAHE, AdjustGamma, No
 from .loading_multiple_images import LoadImagesFromFile
 from .transforms_multiple_images import PhotoMetricDistortionMultiImages, NormalizeMultiImages, CLAHEMultiImages
 from .compose_with_visualization import ComposeWithVisualization
-from ..ccd.pipelines import LoadMultipleImages, LoadMultipleAnnotations, CustomFormatBundle, CreateBinaryChangeMask
+from ..ccd.pipelines import (LoadMultipleImages, LoadMultipleAnnotations,
+                             CustomFormatBundle, CreateBinaryChangeMask,
+                             RandomDiscreteRotate, ChangeAwareAugment)
 
 __all__ = [
     'Compose', 'to_tensor', 'ToTensor', 'ImageToTensor', 'ToDataContainer',
@@ -19,5 +21,6 @@ __all__ = [
     'Normalize', 'SegRescale', 'PhotoMetricDistortion', 'RandomRotate',
     'AdjustGamma', 'CLAHE', 'Rerange', 'RGB2Gray', 'PhotoMetricDistortionMultiImages',
     'ComposeWithVisualization', 'NormalizeMultiImages', 'CLAHEMultiImages',
-    'LoadMultipleImages', 'LoadMultipleAnnotations', 'CustomFormatBundle', 'CreateBinaryChangeMask'
+    'LoadMultipleImages', 'LoadMultipleAnnotations', 'CustomFormatBundle',
+    'CreateBinaryChangeMask', 'RandomDiscreteRotate', 'ChangeAwareAugment'
 ]

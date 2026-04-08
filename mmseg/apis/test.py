@@ -105,24 +105,42 @@ def single_gpu_test(model,
                     # Save BC (0/1) as grayscale
                     bc = res_vis.get('bc', None)
                     if bc is not None:
-                        bc_u8 = (bc.astype(_np.uint8) * 255)
-                        _Image.fromarray(bc_u8).save(out_file.replace('.tif', '_bc.png').replace('.png', '_bc.png'))
+                        bc_u8 = bc.astype(_np.uint8)
+                        # Always use fixed 4-class BC palette:
+                        # 0 bg(black), 1 new(red), 2 removed(blue), 3 unchanged(green)
+                        palette_bc = _np.array([
+                            [0, 0, 0],        # 0 bg
+                            [255, 0, 0],      # 1 new
+                            [0, 0, 255],      # 2 removed
+                            [0, 255, 0],      # 3 unchanged
+                        ], dtype=_np.uint8)
+                        hbc, wbc = bc_u8.shape
+                        bc_rgb = _np.full((hbc, wbc, 3), 128, dtype=_np.uint8)
+                        for idx, color in enumerate(palette_bc):
+                            bc_rgb[bc_u8 == idx] = color
+                        _Image.fromarray(bc_rgb).save(out_file.replace('.tif', '_bc.png').replace('.png', '_bc.png'))
                     # Save SEM with fixed palette
                     sem = res_vis.get('sem', None)
                     if sem is not None:
                         sem_u8 = sem.astype(_np.uint8)
-                        palette = _np.array([
-                            [210, 0, 0],    # artificial
-                            [0, 200, 0],    # agricultural
-                            [0, 128, 0],    # forest
-                            [0, 0, 200],    # wetland
-                            [0, 200, 200],  # water
-                        ], dtype=_np.uint8)
-                        h2, w2 = sem_u8.shape
-                        sem_rgb = _np.full((h2, w2, 3), 128, dtype=_np.uint8)
-                        for idx, color in enumerate(palette):
-                            sem_rgb[sem_u8 == idx] = color
-                        _Image.fromarray(sem_rgb).save(out_file.replace('.tif', '_sem.png').replace('.png', '_sem.png'))
+                        if sem_u8.max() <= 1:
+                            sem_vis = (sem_u8 * 255).astype(_np.uint8)
+                            _Image.fromarray(sem_vis, mode='L').save(
+                                out_file.replace('.tif', '_sem.png').replace('.png', '_sem.png'))
+                        else:
+                            palette = _np.array([
+                                [210, 0, 0],    # artificial
+                                [0, 200, 0],    # agricultural
+                                [0, 128, 0],    # forest
+                                [0, 0, 200],    # wetland
+                                [0, 200, 200],  # water
+                            ], dtype=_np.uint8)
+                            h2, w2 = sem_u8.shape
+                            sem_rgb = _np.full((h2, w2, 3), 128, dtype=_np.uint8)
+                            for idx, color in enumerate(palette):
+                                sem_rgb[sem_u8 == idx] = color
+                            _Image.fromarray(sem_rgb).save(
+                                out_file.replace('.tif', '_sem.png').replace('.png', '_sem.png'))
                 else:
                     model.module.show_result(
                         img_show,

@@ -1,0 +1,321 @@
+checkpoint_config:
+  by_epoch: false
+  interval: 500
+cudnn_benchmark: false
+
+data:
+  samples_per_gpu: 6
+  workers_per_gpu: 4
+  train:
+    - type: LSMDDatasetCCD
+      data_root: ./data/re_lsmd/tiles512_posaware_b2
+      split: train
+      ignore_index_bc: 255
+      ignore_index_sem: 255
+      pipeline:
+        - type: LoadImageFromFile
+          imdecode_backend: tifffile
+        - type: LoadCCDAnnotations
+          imdecode_backend: tifffile
+          reduce_zero_label: false
+          map_255_to_1: false
+        - type: Resize
+          img_scale: [512, 512]
+          ratio_range: [0.8, 1.2]
+        - type: RandomCrop
+          crop_size: [512, 512]
+          cat_max_ratio: 0.95
+        - type: ChangeAwareAugment
+          change_classes: [1, 2]
+          ignore_index: 255
+          flip_prob: 0.5
+          rotate_prob: 0.5
+          rotate_angles: [90, 180, 270]
+          photo_prob: 1.0
+        - type: Normalize
+          mean: [123.675, 116.28, 103.53]
+          std: [58.395, 57.12, 57.375]
+          to_rgb: true
+        - type: Pad
+          size: [512, 512]
+          pad_val: 0
+          seg_pad_val: 255
+        - type: CustomFormatBundle
+        - type: Collect
+          keys:
+            - img
+            - gt_semantic_seg
+            - gt_semantic_seg_pre
+            - gt_semantic_seg_post
+          meta_keys:
+            - filename
+            - ori_filename
+            - ori_shape
+            - img_shape
+            - pad_shape
+            - scale_factor
+            - flip
+            - flip_direction
+            - img_norm_cfg
+    - type: LSMDDatasetCCD
+      data_root: ./data/re_lsmd/tiles512_posaware_b2_synth_v1
+      split: train_synth_v1
+      ignore_index_bc: 255
+      ignore_index_sem: 255
+      pipeline:
+        - type: LoadImageFromFile
+          imdecode_backend: tifffile
+        - type: LoadCCDAnnotations
+          imdecode_backend: tifffile
+          reduce_zero_label: false
+          map_255_to_1: false
+        - type: Resize
+          img_scale: [512, 512]
+          ratio_range: [0.8, 1.2]
+        - type: RandomCrop
+          crop_size: [512, 512]
+          cat_max_ratio: 0.95
+        - type: ChangeAwareAugment
+          change_classes: [1, 2]
+          ignore_index: 255
+          flip_prob: 0.5
+          rotate_prob: 0.5
+          rotate_angles: [90, 180, 270]
+          photo_prob: 1.0
+        - type: Normalize
+          mean: [123.675, 116.28, 103.53]
+          std: [58.395, 57.12, 57.375]
+          to_rgb: true
+        - type: Pad
+          size: [512, 512]
+          pad_val: 0
+          seg_pad_val: 255
+        - type: CustomFormatBundle
+        - type: Collect
+          keys:
+            - img
+            - gt_semantic_seg
+            - gt_semantic_seg_pre
+            - gt_semantic_seg_post
+          meta_keys:
+            - filename
+            - ori_filename
+            - ori_shape
+            - img_shape
+            - pad_shape
+            - scale_factor
+            - flip
+            - flip_direction
+            - img_norm_cfg
+  val:
+    type: LSMDDatasetCCD
+    data_root: ./data/re_lsmd/tiles512_posaware_b2
+    split: val
+    test_mode: true
+    ignore_index_bc: 255
+    ignore_index_sem: 255
+    pipeline:
+      - type: LoadImageFromFile
+        imdecode_backend: tifffile
+      - type: LoadCCDAnnotations
+        imdecode_backend: tifffile
+        reduce_zero_label: false
+        map_255_to_1: false
+      - type: MultiScaleFlipAug
+        img_scale: [512, 512]
+        flip: false
+        transforms:
+          - type: Resize
+            keep_ratio: true
+          - type: ResizeToMultiple
+            size_divisor: 32
+          - type: RandomFlip
+          - type: Normalize
+            mean: [123.675, 116.28, 103.53]
+            std: [58.395, 57.12, 57.375]
+            to_rgb: true
+          - type: ImageToTensor
+            keys: [img]
+          - type: Collect
+            keys: [img, gt_semantic_seg, gt_semantic_seg_pre]
+            meta_keys:
+              - filename
+              - ori_filename
+              - ori_shape
+              - img_shape
+              - pad_shape
+              - scale_factor
+              - flip
+              - flip_direction
+              - img_norm_cfg
+  test:
+    type: LSMDDatasetCCD
+    data_root: ./data/re_lsmd/tiles512_posaware_b2
+    split: test
+    test_mode: true
+    ignore_index_bc: 255
+    ignore_index_sem: 255
+    pipeline:
+      - type: LoadImageFromFile
+        imdecode_backend: tifffile
+      - type: LoadCCDAnnotations
+        imdecode_backend: tifffile
+        reduce_zero_label: false
+        map_255_to_1: false
+      - type: MultiScaleFlipAug
+        img_scale: [512, 512]
+        flip: false
+        transforms:
+          - type: Resize
+            keep_ratio: true
+          - type: ResizeToMultiple
+            size_divisor: 32
+          - type: RandomFlip
+          - type: Normalize
+            mean: [123.675, 116.28, 103.53]
+            std: [58.395, 57.12, 57.375]
+            to_rgb: true
+          - type: ImageToTensor
+            keys: [img]
+          - type: Collect
+            keys: [img, gt_semantic_seg, gt_semantic_seg_pre]
+            meta_keys:
+              - filename
+              - ori_filename
+              - ori_shape
+              - img_shape
+              - pad_shape
+              - scale_factor
+              - flip
+              - flip_direction
+              - img_norm_cfg
+
+dist_params:
+  backend: nccl
+find_unused_parameters: true
+gpu_ids: [0]
+
+model:
+  type: EncoderDecoderCMCD
+  pretrained: ./model_ckpt/mit_b2.pth
+  inference_tile_size: 512
+  train_cfg: {}
+  test_cfg:
+    mode: whole
+  backbone:
+    type: mit_b2
+    ori_type: mit_b2
+    style: pytorch
+  decode_head:
+    type: BaseHeadCCD
+    sem_head:
+      type: CrossModalSegformerSemHead
+      in_channels: [64, 128, 320, 512]
+      in_index: [0, 1, 2, 3]
+      channels: 256
+      dropout_ratio: 0.1
+      num_classes: 2
+      ignore_index: 255
+      norm_cfg:
+        type: BN
+        requires_grad: true
+      align_corners: false
+      loss_decode:
+        type: CrossEntropyLoss
+        use_sigmoid: false
+        loss_weight: 1.0
+    bc_head:
+      type: CrossModalMapFormerHead
+      in_channels: [64, 128, 320, 512]
+      in_index: [0, 1, 2, 3]
+      feature_strides: [4, 8, 16, 32]
+      channels: 256
+      dropout_ratio: 0.1
+      num_classes: 4
+      ignore_index: 255
+      norm_cfg:
+        type: BN
+        requires_grad: true
+      align_corners: false
+      extra_branch: false
+      k: 10
+      contrastive_loss_weight: 0.25
+      balance_pos_neg: true
+      change_classes: [1, 2]
+      map_encoder:
+        type: BasicMapEncoder
+        n_semantic_classes: 2
+        out_channels: 32
+        scale: 0.25
+      loss_decode:
+        type: CrossEntropyLoss
+        use_sigmoid: false
+        loss_weight: 1.0
+        class_weight: [0.5, 8.0, 8.0, 1.0]
+
+optimizer:
+  type: AdamW
+  lr: 6.0e-05
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  paramwise_cfg:
+    custom_keys:
+      head:
+        lr_mult: 10.0
+      norm:
+        decay_mult: 0.0
+      pos_block:
+        decay_mult: 0.0
+optimizer_config: {}
+lr_config:
+  policy: poly
+  by_epoch: false
+  power: 1.0
+  min_lr: 0.0
+  warmup: linear
+  warmup_iters: 1500
+  warmup_ratio: 1.0e-06
+
+runner:
+  type: IterBasedRunner
+  max_iters: 32000
+workflow: [[train, 1]]
+
+evaluation:
+  interval: 2000
+  metric: [mIoU, BC, SC, SCS]
+  save_best: [F1_change, R_change, P_change, IoU_12, SCS]
+  rule: greater
+
+log_level: INFO
+log_config:
+  interval: 50
+  hooks:
+    - type: TextLoggerHook
+      by_epoch: false
+
+loss_plot:
+  enable: true
+  interval: 50
+  out_file: null
+
+val_vis:
+  enable: true
+  interval: 2000
+  num_samples: 10
+  out_dir: null
+
+# Finetune start point
+load_from: ./runs/cross_modal_scd/hrscd/mapformer_f2/best_SCS.pth
+resume_from: null
+
+# Reinitialize only shape-changed heads/maps after loading pretrained weights.
+finetune_reinit:
+  enable: true
+  map_encoder_layer1: true
+  sem_classifier: true
+  bc_classifier: true
+
+run_name: mapformer_t2map_finetune_with_synth_relsmd
+output_dir: runs/cross_modal_scd/lsmd/mapformer_t2map_finetune_with_synth_relsmd
+work_dir: ./runs/cross_modal_scd/lsmd/mapformer_t2map_finetune_with_synth_relsmd

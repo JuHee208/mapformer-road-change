@@ -11,6 +11,7 @@ import setproctitle
 
 import mmcv
 import torch
+import torch.nn as nn
 from mmcv.runner import init_dist
 from mmcv.utils import Config, DictAction, get_git_hash
 
@@ -164,6 +165,44 @@ def main():
         cfg.model,
         train_cfg=cfg.get('train_cfg'),
         test_cfg=cfg.get('test_cfg'))
+
+    # Optional: reinitialize only selected heads/maps for finetuning.
+    reinit_cfg = cfg.get('finetune_reinit', None)
+    if reinit_cfg and reinit_cfg.get('enable', False):
+        reinit_logs = []
+
+        def _try_reset(module, name):
+            if module is None:
+                reinit_logs.append(f'[skip] {name}: not found')
+                return
+            if hasattr(module, 'reset_parameters'):
+                module.reset_parameters()
+                reinit_logs.append(f'[ok] {name}: reset_parameters()')
+                return
+            touched = 0
+            for m in module.modules():
+                if isinstance(m, (nn.Conv2d, nn.Linear, nn.BatchNorm2d, nn.LayerNorm)):
+                    if hasattr(m, 'reset_parameters'):
+                        m.reset_parameters()
+                        touched += 1
+            reinit_logs.append(f'[ok] {name}: reset {touched} sub-layers')
+
+        decode_head = getattr(model, 'decode_head', None)
+        bc_head = getattr(decode_head, 'bc_head', None) if decode_head is not None else None
+        sem_head = getattr(decode_head, 'sem_head', None) if decode_head is not None else None
+
+        if reinit_cfg.get('map_encoder_layer1', False):
+            map_encoder = getattr(bc_head, 'map_encoder', None) if bc_head is not None else None
+            _try_reset(getattr(map_encoder, 'layer1', None), 'decode_head.bc_head.map_encoder.layer1')
+        if reinit_cfg.get('bc_head_all', False):
+            _try_reset(bc_head, 'decode_head.bc_head(all)')
+        if reinit_cfg.get('sem_classifier', False):
+            _try_reset(getattr(sem_head, 'conv_seg', None), 'decode_head.sem_head.conv_seg')
+        if reinit_cfg.get('bc_classifier', False):
+            _try_reset(getattr(bc_head, 'conv_seg', None), 'decode_head.bc_head.conv_seg')
+
+        if reinit_logs:
+            logger.info('Finetune reinit summary:\n  ' + '\n  '.join(reinit_logs))
 
     logger.info(model)
 
