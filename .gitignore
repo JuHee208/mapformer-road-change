@@ -132,10 +132,14 @@ dmypy.json
 .vscode
 
 # Project-local artifacts
-/data
-/model_ckpt
-/runs
-/outputs
+/data/*
+!/data/.gitkeep
+/model_ckpt/*
+!/model_ckpt/.gitkeep
+/runs/*
+!/runs/.gitkeep
+/outputs/*
+!/outputs/.gitkeep
 /wandb
 /tmp_*/
 /loss_curves
