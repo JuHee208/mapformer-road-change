@@ -4,6 +4,28 @@ This repository extends MapFormer toward road change detection on LSMD-style dat
 
 The codebase is built on top of the original MapFormer implementation from the ICCV 2023 paper "MapFormer: Boosting Change Detection by Using Semantic Pre-change Information", plus MMSegmentation- and Open-CD-style components.
 
+## 한국어 안내
+
+이 저장소는 MapFormer를 기반으로 도로 변화탐지 실험을 수행하기 위해 정리한 코드입니다. 기본적으로는 원본 MapFormer의 HRSCD, DynamicEarthNet 실험 경로를 유지하고, 여기에 LSMD 계열 데이터셋용 데이터 로더, 파인튜닝 설정, synthetic 데이터 생성 스크립트, 대면적 GeoTIFF 추론 도구를 추가한 형태입니다.
+
+실제로 많이 보게 되는 흐름은 아래와 같습니다.
+
+1. `data/` 아래에 원본 데이터와 전처리 결과를 둡니다.
+2. `tools/convert_datasets/` 아래 스크립트로 split 생성, reprojection, tile 생성을 수행합니다.
+3. `configs/cross_modal_scd/lsmd/` 아래 실험 설정 파일을 선택합니다.
+4. `python tools/train.py ... --work-dir runs/...` 형태로 학습합니다.
+5. 학습 결과 체크포인트와 로그는 `runs/` 아래 실험별 폴더에 저장됩니다.
+6. test, validation visualization, loss curve, large-area inference 결과도 같은 실험 폴더 또는 `outputs/` 아래에 정리됩니다.
+
+중요한 폴더 구분은 다음과 같습니다.
+
+- `model_ckpt/`: 학습 시작 전에 넣어두는 pretrained backbone 가중치
+- `runs/`: 학습을 돌린 뒤 생성되는 실제 결과물 폴더
+- `outputs/`: 대면적 추론 결과나 후처리 결과
+- `data/`: 원본 데이터, 분할 파일, 타일 데이터
+
+즉, 학습된 모델은 `model_ckpt/` 가 아니라 `runs/` 아래에 저장됩니다. `model_ckpt/mit_b2.pth` 같은 파일은 초기 backbone 가중치이고, 실제 fine-tuning 결과는 예를 들어 `runs/cross_modal_scd/lsmd/mapformer_t2map_finetune/best_SCS.pth` 같은 경로에 생깁니다.
+
 ## Scope
 
 The main research focus in this repository is road change detection with semantic pre-map input.
@@ -68,6 +90,23 @@ For the LSMD road-change pipeline in particular:
 - [mmseg/datasets/ccd/lsmd.py](mmseg/datasets/ccd/lsmd.py): LSMD dataset loader
 - [tools/convert_datasets](tools/convert_datasets): LSMD reprojection, split generation, tiling, and synthesis utilities
 - [tools/infer_large_tif_tiles.py](tools/infer_large_tif_tiles.py): tiled inference on large GeoTIFF scenes
+
+학습 결과물 정리 기준은 아래처럼 보면 됩니다.
+
+- `runs/<task>/<dataset>/<experiment_name>/iter_XXXX.pth`: 주기적으로 저장된 checkpoint
+- `runs/<task>/<dataset>/<experiment_name>/best_*.pth`: 특정 metric 기준 best checkpoint
+- `runs/<task>/<dataset>/<experiment_name>/*.log`: 텍스트 로그
+- `runs/<task>/<dataset>/<experiment_name>/*.log.json`: 파싱 가능한 학습 로그
+- `runs/<task>/<dataset>/<experiment_name>/val_vis/`: validation 시각화 결과
+- `runs/<task>/<dataset>/<experiment_name>/loss_curves/`: loss curve 이미지나 로그 기반 그래프
+- `runs/<task>/<dataset>/<experiment_name>/test/` 또는 `test_vis/`: 테스트 결과 저장 폴더
+
+현재 로컬 기준으로는 다음과 같은 실험 폴더들이 확인됩니다.
+
+- `runs/cross_modal_scd/lsmd/mapformer_t2map_finetune/`
+- `runs/cross_modal_scd/lsmd/mapformer_t2map_finetune_stage1/`
+- `runs/cross_modal_scd/lsmd/mapformer_t2map_finetune_stage1_focal/`
+- `runs/cross_modal_scd/re_lsmd/mapformer_t2map_ft_recover_bs6w4_32k/`
 
 ## LSMD Data Layout
 
@@ -202,6 +241,8 @@ Several non-LSMD configs also use:
 
 - `./model_ckpt/mit_b2_20220624-66e8bf70.pth`
 
+`model_ckpt/` 는 시작용 가중치 폴더입니다. 여기 들어가는 것은 pretrained backbone 이고, 학습 완료 후 best model 이 자동으로 이 폴더에 복사되지는 않습니다.
+
 ## Training
 
 The default launcher is:
@@ -251,6 +292,44 @@ Synthetic-data variants:
 bash scripts/train_lsmd_with_synth.sh
 bash scripts/train_lsmd_with_synth_relsmd.sh
 ```
+
+## 학습 결과 저장 위치
+
+학습을 실행하면 결과는 `--work-dir` 로 지정한 경로 아래에 저장됩니다. `--work-dir` 를 생략하면 config 또는 기본 runner 설정에 따라 work directory 가 결정됩니다. 공개용으로는 항상 `--work-dir` 를 명시하는 편이 좋습니다.
+
+예를 들어 아래처럼 학습하면:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 WANDB_MODE=disabled \
+python tools/train.py \
+  configs/cross_modal_scd/lsmd/mapformer_t2map_finetune.yaml \
+  --work-dir runs/cross_modal_scd/lsmd/mapformer_t2map_finetune
+```
+
+주요 결과물은 보통 다음처럼 생깁니다.
+
+```text
+runs/cross_modal_scd/lsmd/mapformer_t2map_finetune/
+  iter_500.pth
+  iter_1000.pth
+  ...
+  best_SCS.pth
+  best_F1_change.pth
+  best_IoU_12.pth
+  20260222_054331.log
+  20260222_054331.log.json
+  val_vis/
+  loss_curves/
+```
+
+파일 의미는 다음과 같습니다.
+
+- `iter_XXXX.pth`: 해당 iteration 시점 checkpoint
+- `best_*.pth`: validation metric 기준 최고 성능 checkpoint
+- `*.log`: 사람이 읽는 로그
+- `*.log.json`: loss curve 재생성이나 분석에 쓰기 좋은 structured log
+
+즉, 논문이나 결과 보고용으로 다시 사용할 모델은 보통 `best_SCS.pth`, `best_F1_change.pth` 같은 파일을 보면 됩니다.
 
 ## Evaluation
 
