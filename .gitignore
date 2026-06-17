@@ -130,18 +130,21 @@ dmypy.json
 
 # Other stuff
 .vscode
-/data/
-data/**.tif
-model_ckpt
-runs
 
-/data/
-runs/
-model_ckpt/
+# Project-local artifacts
+/data
+/model_ckpt
+/runs
+/outputs
+/wandb
+/tmp_*/
+/loss_curves
+*.pth
+*.pkl
+*.pickle
+*.npy
+*.npz
+
+# Local reference files
 =
-*.pdf
-*.tif
-*.tiff
-*.png
-outputs/
-tmp_*/
+Bernhard_MapFormer_Boosting_Change_Detection_by_Using_Pre-change_Information_ICCV_2023_paper.pdf
