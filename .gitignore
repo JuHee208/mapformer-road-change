@@ -132,8 +132,12 @@ dmypy.json
 .vscode
 
 # Project-local artifacts
-/data/*
+/data/**
+!/data/
+!/data/**/
 !/data/.gitkeep
+!/data/**/.gitkeep
+!/data/**/README.md
 /model_ckpt/*
 !/model_ckpt/.gitkeep
 /runs/*
