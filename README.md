@@ -4,7 +4,7 @@ This repository extends MapFormer toward road change detection on LSMD-style dat
 
 The codebase is built on top of the original MapFormer implementation from the ICCV 2023 paper "MapFormer: Boosting Change Detection by Using Semantic Pre-change Information", plus MMSegmentation- and Open-CD-style components.
 
-## 한국어 안내
+## 소개
 
 이 저장소는 MapFormer를 기반으로 도로 변화탐지 실험을 수행하기 위해 정리한 코드입니다. 기본적으로는 원본 MapFormer의 HRSCD, DynamicEarthNet 실험 경로를 유지하고, 여기에 LSMD 계열 데이터셋용 데이터 로더, 파인튜닝 설정, synthetic 데이터 생성 스크립트, 대면적 GeoTIFF 추론 도구를 추가한 형태입니다.
 
